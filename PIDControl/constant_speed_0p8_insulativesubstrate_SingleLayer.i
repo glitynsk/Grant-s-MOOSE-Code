@@ -1,6 +1,32 @@
 ################################################################################
-## PID-Controlled Frontal Polymerization Simulation
-## Uses PIDTransientControlInterval with control_interval=0.05s
+## Constant Speed Single-Layer Frontal Polymerization Printing - INSULATIVE SUBSTRATE
+## NO PID CONTROL - constant 0.8 mm/s printing speed
+##
+## Domain:
+##   - No substrate domain (insulative substrate assumption)
+##   - 1 ink layer, 20mm long x 1.6mm thick (y = 0 to 1.6mm)
+##   - Total: 20mm x 1.6mm
+##
+## Initial Conditions:
+##   - Ink: x=0 to x=1.6mm on Layer 1, 20°C
+##   - Nozzle starts at x=1.6mm (right edge of initial ink)
+##   - Nozzle is stationary for first 1 second (heat source on left)
+##
+## Boundary Conditions:
+##   - Bottom of ink: ADIABATIC (no heat flux - insulative substrate)
+##   - Top of ink: convection to ambient (20°C)
+##   - Left of ink: 200°C for first 1 second, then convection
+##
+## Printing Process:
+##   - After 1 second: nozzle moves at 0.8 mm/s constant speed
+##   - Print continues until nozzle reaches end (20mm)
+##
+## Parameters:
+##   - print_speed = 0.0008 m/s (0.8 mm/s)
+##   - start_delay = 1 s
+##   - layer_length = 0.02 m (20 mm)
+##   - layer_height = 0.0016 m (1.6 mm)
+##   - num_layers = 1
 ################################################################################
 
 [Mesh]
@@ -9,31 +35,22 @@
     dim = 2
     xmin = 0.0
     xmax = 0.02           # 20 mm length
-    ymin = -0.0033        # Bottom of glass substrate (-3.3 mm)
+    ymin = 0.0            # Bottom of ink (no substrate)
     ymax = 0.0016         # Top of 1 ink layer (1.6 mm)
     nx = 120              # Same resolution as original
-    ny = 37               # 25 elements for substrate (3.3mm) + 12 for ink (1.6mm)
-  []
-
-  # Glass substrate region (block 2)
-  [substrate]
-    type = SubdomainBoundingBoxGenerator
-    input = 'gen'
-    block_id = 2
-    bottom_left = '0 -0.0033 0'
-    top_right = '0.02 0 0'
+    ny = 12               # 12 elements for ink (1.6mm)
   []
 
   # Initial ink region (Layer 1, first 1.6mm) - block 1
   [ink]
     type = SubdomainBoundingBoxGenerator
-    input = 'substrate'
+    input = 'gen'
     block_id = 1
     bottom_left = '0 0 0'
     top_right = '0.0016 0.0016 0'
   []
 
-  # Air region (rest of domain above substrate) - block 0
+  # Air region (rest of domain) - block 0
   [air]
     type = SubdomainBoundingBoxGenerator
     input = 'ink'
@@ -52,8 +69,6 @@
   []
 
   # Create sideset for left boundary of initial ink region (for convection BC)
-  # NOTE: ParsedGenerateSideset does NOT export sidesets to Exodus/ParaView.
-  #       Use SideSetsAroundSubdomainGenerator instead.
   [left_ink_sideset]
     type = SideSetsAroundSubdomainGenerator
     input = 'top'
@@ -63,6 +78,7 @@
   []
 
   # Pre-declare moving boundary sideset for top surface of newly activated ink
+  # Note: No bottom buffer, so moving boundary only captures top surface
   add_sideset_names = 'ink_top_moving'
   add_sideset_ids = '7'
 []
@@ -75,11 +91,11 @@
 []
 
 [Variables]
-  # Temperature on substrate and ink only (not air - it will be activated as ink)
+  # Temperature on ink only (no substrate)
   [Temperature]
     order = FIRST
     family = LAGRANGE
-    block = '1 2'
+    block = '1'
   []
   # Cure only on ink block
   [Cure]
@@ -91,13 +107,6 @@
 []
 
 [ICs]
-  # Substrate initial temperature: 85°C
-  [substrate_temp_ic]
-    type = ConstantIC
-    variable = Temperature
-    value = 85
-    block = '2'
-  []
   # Ink region initial temperature: 20°C
   [ink_temp_ic]
     type = ConstantIC
@@ -109,6 +118,7 @@
 
 [AuxVariables]
   [dist]
+    # Distance from nozzle position
   []
   [bounds_dummy]
   []
@@ -118,9 +128,9 @@
   [compute_dist]
     type = ParsedAux
     variable = dist
-    expression = 'sqrt((x-xn)^2+(y-0.0008)^2)'
-    functor_names = 'nozzle_x_value'
-    functor_symbols = 'xn'
+    expression = 'sqrt((x-nozzle_x)^2 + (y-nozzle_y)^2)'
+    functor_names = 'nozzle_x_value nozzle_y_value'
+    functor_symbols = 'nozzle_x nozzle_y'
     use_xyzt = true
     execute_on = 'INITIAL TIMESTEP_BEGIN'
   []
@@ -144,25 +154,14 @@
 []
 
 [Kernels]
-  # Heat diffusion on all blocks (substrate, ink, and air for continuity)
-  [tempdiff_substrate]
-    type = TempDiffusion
-    block = '2'
-    variable = Temperature
-  []
+  # Heat diffusion on ink only (no substrate)
   [tempdiff_ink]
     type = TempDiffusion
     block = '1'
     variable = Temperature
   []
 
-  # Heat capacity time derivative on substrate and ink
-  [tempderv_substrate]
-    type = HeatConductionTimeDerivative
-    block = '2'
-    variable = Temperature
-    lumping = false
-  []
+  # Heat capacity time derivative on ink
   [tempderv_ink]
     type = HeatConductionTimeDerivative
     block = '1'
@@ -199,13 +198,8 @@
 []
 
 [BCs]
-  # Bottom of glass substrate maintained at 85°C
-  [temp_bottom_substrate]
-    type = DirichletBC
-    variable = Temperature
-    boundary = bottom
-    value = 85
-  []
+  # Bottom of ink: ADIABATIC (no BC = zero flux for insulative substrate)
+  # No bottom BC needed - natural boundary condition is zero flux
 
   # Heat source applied to left boundary of initial ink region (first 1 second)
   [temp_left]
@@ -225,56 +219,53 @@
   []
 []
 
-#[Functions]
-#
-#  [./coef_func]
-#    type = ParsedFunction
-#    expression = '30 - 10 * if(sin(2*pi*(1/10)*t) > 0, 1, -1)'
-#  [../]
-#
-#  [./Tinf_func]
-#    type = ParsedFunction
-#    expression = '4.1667e-4*t^3 - 0.0429*t^2 + 1.4226*t + 15'
-#
-#  [../]
-#  
-#[]
-
-
 [Materials]
-  # Ink material properties
+  # Ink material properties (no substrate)
   [ink]
     block = 1
     type = GenericConstantMaterial
     prop_names = 'specific_heat Hr density TConductivity A'
     prop_values = '1600 340000 980 0.152 3.129e14'
   []
+[]
 
-  # Glass (borosilicate) substrate material properties
-  [glass]
-    block = 2
-    type = GenericConstantMaterial
-    prop_names = 'specific_heat density TConductivity'
-    prop_values = '830 2230 1.14'
+[Functions]
+  # Constant speed velocity function (single layer - 1s delay then constant)
+  [velocity_func]
+    type = ParsedFunction
+    expression = '0.001'
   []
 []
 
 [Postprocessors]
+  # ============ Velocity Control ============
   [velocity_pp]
-    type = Receiver
-    default = 0.001
+    type = FunctionValuePostprocessor
+    function = velocity_func
+    execute_on = 'INITIAL TIMESTEP_BEGIN TIMESTEP_END'
   []
-  [nozzle_displacement]
+
+  # ============ Nozzle Position Tracking ============
+  [nozzle_x_displacement]
     type = TimeIntegratedPostprocessor
     value = velocity_pp
     execute_on = 'INITIAL TIMESTEP_BEGIN TIMESTEP_END'
   []
+
   [nozzle_x_value]
     type = ParsedPostprocessor
-    expression = '0.0008 + nozzle_displacement'
-    pp_names = 'nozzle_displacement'
+    expression = '0.0016 + nozzle_x_displacement'
+    pp_names = 'nozzle_x_displacement'
     execute_on = 'INITIAL TIMESTEP_BEGIN TIMESTEP_END'
   []
+
+  [nozzle_y_value]
+    type = ConstantPostprocessor
+    value = 0.0008  # Middle of single layer (1.6mm / 2 = 0.8mm)
+    execute_on = 'INITIAL TIMESTEP_BEGIN TIMESTEP_END'
+  []
+
+  # ============ Front Tracking ============
   [front_location]
     type = FindValueOnLine
     v = Cure
@@ -287,34 +278,60 @@
     default_value = 0.0
     execute_on = 'INITIAL TIMESTEP_END'
   []
+
+  # ============ Distance Calculations ============
   [front_nozzle_distance]
-    type = DifferencePostprocessor
-    value1 = nozzle_x_value
-    value2 = front_location
+    type = ParsedPostprocessor
+    expression = 'abs(nozzle_x_value - front_location)'
+    pp_names = 'nozzle_x_value front_location'
     execute_on = 'INITIAL TIMESTEP_END'
   []
+
+  [front_to_layer_end]
+    type = ParsedPostprocessor
+    expression = '0.02 - front_location'
+    pp_names = 'front_location'
+    execute_on = 'INITIAL TIMESTEP_END'
+  []
+
+  # ============ Velocity and State Tracking ============
   [front_velocity]
     type = ChangeOverTimePostprocessor
     postprocessor = front_location
     change_with_respect_to_initial = false
     execute_on = 'TIMESTEP_END'
   []
+
   [print_velocity]
     type = ScalePostprocessor
     value = velocity_pp
     scaling_factor = 1.0
     execute_on = 'TIMESTEP_END'
   []
-  
-#  [./Tinf_pp]
-#    type = FunctionValuePostprocessor
-#    function = Tinf_func
-#  [../]
-  
-#  [./coe_pp]
-#    type = FunctionValuePostprocessor
-#    function = coef_func
-#  [../]
+
+  # ============ Cure Monitoring ============
+  [max_cure]
+    type = ElementExtremeValue
+    variable = Cure
+    block = 1
+    value_type = max
+    execute_on = 'TIMESTEP_END'
+  []
+
+  [avg_cure_ink]
+    type = ElementAverageValue
+    variable = Cure
+    block = 1
+    execute_on = 'TIMESTEP_END'
+  []
+
+  [max_temperature]
+    type = ElementExtremeValue
+    variable = Temperature
+    block = 1
+    value_type = max
+    execute_on = 'TIMESTEP_END'
+  []
 []
 
 [MeshModifiers]
@@ -324,30 +341,16 @@
     subdomain_id = 1
     threshold = 0.0008
     criterion_type = BELOW
-    # Moving boundary for convection BC on external ink surfaces
-#    moving_boundaries = 'ink_surface'
-#    moving_boundary_subdomain_pairs = '1'
-    execute_on = 'TIMESTEP_BEGIN'
+    # Moving boundary for convection BC on top surface of newly activated ink
+    moving_boundaries = 'ink_top_moving'
+    moving_boundary_subdomain_pairs = '1 0'
+    # Execute at both BEGIN and END to handle elements refined by adaptivity at TIMESTEP_END
+    execute_on = 'TIMESTEP_BEGIN TIMESTEP_END'
   []
 []
 
 [Controls]
-  [pid_velocity]
-    type = PIDTransientControlIntervalNew
-    postprocessor = front_nozzle_distance
-    target = 0.007
-    parameter_pp = 'velocity_pp'
-    K_proportional = -3.0
-    K_integral = -0.5
-    K_derivative = 0.0
-    control_interval = 0.1           # PID updates every 0.1s (not every dt)
-    minimum_output_value = 0.0001
-    maximum_output_value = 0.1
-    execute_on = 'TIMESTEP_BEGIN'
-    start_time = '3.0'
-    reset_integral_windup = false
-
-  []
+  # Disable left BC after 1 second
   [bcs]
     type = TimePeriod
     disable_objects = 'BCs::temp_left'
@@ -358,31 +361,31 @@
 
 [Adaptivity]
   marker = errorfrac
-  max_h_level = 3
-  [./Indicators]
-    [./error]
+  max_h_level = 4
+  [Indicators]
+    [error]
       type = GradientJumpIndicator
       variable = Cure
       outputs = none
-    [../]
-  [../]
-  [./Markers]
-    [./errorfrac]
+    []
+  []
+  [Markers]
+    [errorfrac]
       type = ErrorFractionMarker
       refine = 0.65
       coarsen = 0.2
       indicator = error
       outputs = none
-    [../]
-  [../]
+    []
+  []
 []
 
 [Executioner]
   automatic_scaling = true
   type = Transient
-  num_steps = 80000
+  num_steps = 800000
   nl_rel_tol = 1e-7
-  end_time = 8
+  end_time = 30  # Single layer: ~24s print time + margin
   nl_max_its = 10
   l_max_its = 15
   [TimeStepper]
@@ -397,15 +400,29 @@
   petsc_options_value = 'vinewtonrsls'
 []
 
+[VectorPostprocessors]
+  [./cure_sample]
+    type = LineValueSampler
+    variable = Cure
+    start_point = '0 0.0008 0'
+    end_point = '0.02 0.0008 0'
+    num_points = 1000
+    sort_by = x
+  [../]
+
+
+[]
+
 [Outputs]
   [exodus]
     type = Exodus
-    file_base = pid_control_new7pos_simple_report_begin/pid_control
+    file_base = constant_speed_1_insulativesubstrate_SingleLayer_out/constant_speed_1_insulativesubstrate_SingleLayer_out
     execute_on = 'initial timestep_end'
+    time_step_interval = 10
   []
   [csv]
     type = CSV
-    file_base = pid_control_new7pos_simple_report_begin/pid_data
+    file_base = constant_speed_1_insulativesubstrate_SingleLayer_out/constant_speed_1_insulativesubstrate_SingleLayer_data
     execute_on = 'initial timestep_end'
   []
 []
