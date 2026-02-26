@@ -277,7 +277,7 @@
   # Constant speed velocity function (single layer - 1s delay then constant)
   [velocity_func]
     type = ParsedFunction
-    expression = 'if(t < 2, 0.01, 0.0)'
+    expression = 'if(t < 2, 0.05, 0.0)'
   []
 []
 
